@@ -107,18 +107,23 @@
                         <!-- 分类按钮将通过 JavaScript 动态生成 -->
                     </div>
                 </div>
-                <!-- Keyword Tag Container -->
-                <div class="keyword-label-container">
-                    <span class="keyword-nav-label">Keywords</span>
-                    <div class="keyword-scroll" id="keywordTags">
-                        <!-- Keywords will be dynamically added here -->
+                <!-- Filter Tag Container -->
+                <div class="filter-label-container">
+                    <span class="filter-nav-label">Filter</span>
+                    <!-- Text Search (magnifier-triggered) -->
+                    <div id="textSearchContainer" class="text-search">
+                        <button id="textSearchToggle" class="icon-button" title="Search">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M10.5 3a7.5 7.5 0 105.07 13.07l3.68 3.68a1 1 0 001.41-1.41l-3.68-3.68A7.5 7.5 0 0010.5 3zm0 2a5.5 5.5 0 110 11 5.5 5.5 0 010-11z" fill="currentColor"/>
+                            </svg>
+                        </button>
+                        <div class="search-input-wrapper" style="display: none;">
+                            <input id="textSearchInput" type="text" placeholder="Type to search..." aria-label="Search" />
+                            <button id="textSearchClear" class="clear-x" title="Clear" style="display: none;">×</button>
+                        </div>
                     </div>
-                </div>
-                <!-- Author Tag Container -->
-                <div class="author-label-container">
-                    <span class="author-nav-label">Authors</span>
-                    <div class="author-scroll" id="authorTags">
-                        <!-- Authors will be dynamically added here -->
+                    <div class="filter-scroll" id="filterTags">
+                        <!-- Authors and Keywords will be dynamically added here -->
                     </div>
                 </div>
             </div>
@@ -200,6 +205,13 @@
             <p>&copy; 2025 daily-arXiv-ai-enhanced | <a href="https://github.com/zihu97/daily-arXiv-ai-enhanced" target="_blank">GitHub</a></p>
         </div>
     </footer>
+
+    <!-- 回到顶部按钮 -->
+    <button id="backToTop" class="back-to-top" title="back to top">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 14L12 9L17 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
 
     <script src="js/app.js?v=1.0.1"></script>
 </body>
