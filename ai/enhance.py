@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict
 from queue import Queue
 from threading import Lock
+# INSERT_YOUR_CODE
+import requests
 
 import dotenv
 import argparse
@@ -33,6 +35,33 @@ def parse_args():
     return parser.parse_args()
 
 def process_single_item(chain, item: Dict, language: str) -> Dict:
+    def is_sensitive(content: str) -> bool:
+        """
+        调用 spam.dw-dengwei.workers.dev 接口检测内容是否包含敏感词。
+        返回 True 表示触发敏感词，False 表示未触发。
+        """
+        try:
+            resp = requests.post(
+                "https://spam.dw-dengwei.workers.dev",
+                json={"text": content},
+                timeout=5
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                # 约定接口返回 {"sensitive": true/false, ...}
+                return result.get("sensitive", True)
+            else:
+                # 如果接口异常，默认不触发敏感词
+                print(f"Sensitive check failed with status {resp.status_code}", file=sys.stderr)
+                return True
+        except Exception as e:
+            print(f"Sensitive check error: {e}", file=sys.stderr)
+            return True
+
+    # 检查 summary 字段
+    if is_sensitive(item.get("summary", "")):
+        return None
+
     """处理单个数据项"""
     # Default structure with meaningful fallback values
     default_ai_fields = {
@@ -86,7 +115,12 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
         for field in default_ai_fields.keys():
             if field not in item['AI']:
                 item['AI'][field] = default_ai_fields[field]
-        
+
+        # 检查 AI 生成的所有字段
+        for v in item.get("AI", {}).values():
+            if is_sensitive(str(v)):
+                return None
+
         return item
 
 def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int) -> List[Dict]:
@@ -173,7 +207,8 @@ def main():
     # 保存结果
     with open(target_file, "w") as f:
         for item in processed_data:
-            f.write(json.dumps(item) + "\n")
+            if item is not None:
+                f.write(json.dumps(item) + "\n")
 
 if __name__ == "__main__":
     main()
