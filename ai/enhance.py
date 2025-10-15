@@ -71,7 +71,7 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
         "result": "Result analysis unavailable",
         "conclusion": "Conclusion extraction failed"
     }
-    max_retries = 3
+    max_retries = 2
     retry_count = 0
 
     while retry_count <= max_retries:

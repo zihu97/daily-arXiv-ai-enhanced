@@ -114,7 +114,13 @@ jobs:
         echo "开始AI增强处理... / Starting AI enhancement processing..."
         
         cd ai
-        # 使用调度触发或手动触发不同的API密钥
+        
+        # 定义AI处理函数 / Define AI processing function
+        run_ai_enhancement() {
+          python enhance.py --data ../data/${today}.jsonl
+          return $?
+        }
+
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY_BAK }}
           export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL_BAK }}
@@ -126,12 +132,18 @@ jobs:
         fi
         export LANGUAGE="${{ vars.LANGUAGE }}"
         
-        python enhance.py --data ../data/${today}.jsonl
-        
-        # 检查AI处理是否成功 / Check if AI processing was successful
-        if [ $? -ne 0 ]; then
-            echo "AI处理失败 / AI processing failed"
-            exit 1
+        if ! run_ai_enhancement; then
+            echo "AI处理首次尝试失败，使用备份密钥重试..."
+            
+            # 使用备份API密钥重试
+            export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY_BAK }}
+            export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL_BAK }}
+            export MODEL_NAME="${{ vars.MODEL_NAME_BAK }}"
+            
+            if ! run_ai_enhancement; then
+                echo "AI处理重试失败 / AI processing retry failed"
+                exit 1
+            fi
         fi
         echo "AI增强处理完成 / AI enhancement processing completed"
         
