@@ -71,57 +71,48 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
         "result": "Result analysis unavailable",
         "conclusion": "Conclusion extraction failed"
     }
-    max_retries = 2
-    retry_count = 0
 
-    while retry_count <= max_retries:
-        try:
-            response: Structure = chain.invoke({
-                "language": language,
-                "content": item['summary']
-            })
-            item['AI'] = response.model_dump()
-        except langchain_core.exceptions.OutputParserException as e:
-            # 尝试从错误信息中提取 JSON 字符串并修复
-            error_msg = str(e)
-            partial_data = {}
-            
-            if "Function Structure arguments:" in error_msg:
-                try:
-                    # 提取 JSON 字符串
-                    json_str = error_msg.split("Function Structure arguments:", 1)[1].strip().split('are not valid JSON')[0].strip()
-                    # 预处理 LaTeX 数学符号 - 使用四个反斜杠来确保正确转义
-                    json_str = json_str.replace('\\', '\\\\')
-                    # 尝试解析修复后的 JSON
-                    partial_data = json.loads(json_str)
-                except Exception as json_e:
-                    print(f"Failed to parse JSON for {item.get('id', 'unknown')}: {json_e}", file=sys.stderr)
-            
-            # Merge partial data with defaults to ensure all fields exist
-            item['AI'] = {**default_ai_fields, **partial_data}
-            print(f"Using partial AI data for {item.get('id', 'unknown')}: {list(partial_data.keys())}", file=sys.stderr)
-        except Exception as e:
-            # 如果是重试次数未用完的API错误，进行重试
-            if retry_count < max_retries:
-                print(f"API error for {item['id']}, attempt {retry_count + 1}/{max_retries + 1}, retrying in 1h: {e}", file=sys.stderr)
-                time.sleep(3600)  # 等待1h后重试
-                retry_count += 1
-            else:
-                # Catch any other exceptions and provide default values
-                print(f"Unexpected error for {item.get('id', 'unknown')}: {e}", file=sys.stderr)
-                item['AI'] = default_ai_fields
+    try:
+        response: Structure = chain.invoke({
+            "language": language,
+            "content": item['summary']
+        })
+        item['AI'] = response.model_dump()
+    except langchain_core.exceptions.OutputParserException as e:
+        # 尝试从错误信息中提取 JSON 字符串并修复
+        error_msg = str(e)
+        partial_data = {}
         
-        # Final validation to ensure all required fields exist
-        for field in default_ai_fields.keys():
-            if field not in item['AI']:
-                item['AI'][field] = default_ai_fields[field]
+        if "Function Structure arguments:" in error_msg:
+            try:
+                # 提取 JSON 字符串
+                json_str = error_msg.split("Function Structure arguments:", 1)[1].strip().split('are not valid JSON')[0].strip()
+                # 预处理 LaTeX 数学符号 - 使用四个反斜杠来确保正确转义
+                json_str = json_str.replace('\\', '\\\\')
+                # 尝试解析修复后的 JSON
+                partial_data = json.loads(json_str)
+            except Exception as json_e:
+                print(f"Failed to parse JSON for {item.get('id', 'unknown')}: {json_e}", file=sys.stderr)
+        
+        # Merge partial data with defaults to ensure all fields exist
+        item['AI'] = {**default_ai_fields, **partial_data}
+        print(f"Using partial AI data for {item.get('id', 'unknown')}: {list(partial_data.keys())}", file=sys.stderr)
+    except Exception as e:
+        # Catch any other exceptions and provide default values
+        print(f"Unexpected error for {item.get('id', 'unknown')}: {e}", file=sys.stderr)
+        item['AI'] = default_ai_fields
+    
+    # Final validation to ensure all required fields exist
+    for field in default_ai_fields.keys():
+        if field not in item['AI']:
+            item['AI'][field] = default_ai_fields[field]
 
-        # 检查 AI 生成的所有字段
-        for v in item.get("AI", {}).values():
-            if is_sensitive(str(v)):
-                return None
+    # 检查 AI 生成的所有字段
+    for v in item.get("AI", {}).values():
+        if is_sensitive(str(v)):
+            return None
 
-        return item
+    return item
 
 def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int) -> List[Dict]:
     """并行处理所有数据项"""
