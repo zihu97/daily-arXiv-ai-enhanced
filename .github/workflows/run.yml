@@ -121,15 +121,15 @@ jobs:
           return $?
         }
 
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+        # if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY_BAK }}
           export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL_BAK }}
           export MODEL_NAME="${{ vars.MODEL_NAME_BAK }}"
-        else
-          export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-          export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
-          export MODEL_NAME="${{ vars.MODEL_NAME }}"
-        fi
+        # else
+        #   export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        #   export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
+        #   export MODEL_NAME="${{ vars.MODEL_NAME }}"
+        # fi
         export LANGUAGE="${{ vars.LANGUAGE }}"
         
         if ! run_ai_enhancement; then
