@@ -34,7 +34,7 @@ def parse_args():
     parser.add_argument("--max_workers", type=int, default=1, help="Maximum number of parallel workers")
     return parser.parse_args()
 
-def process_single_item(chain, item: Dict, language: str) -> Dict:
+def process_single_item(chains_to_try, item: Dict, language: str) -> Dict:
     def is_sensitive(content: str) -> bool:
         """
         调用 spam.dw-dengwei.workers.dev 接口检测内容是否包含敏感词。
@@ -49,14 +49,15 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
             if resp.status_code == 200:
                 result = resp.json()
                 # 约定接口返回 {"sensitive": true/false, ...}
-                return result.get("sensitive", True)
+                return result.get("sensitive", False)
             else:
                 # 如果接口异常，默认不触发敏感词
                 print(f"Sensitive check failed with status {resp.status_code}", file=sys.stderr)
-                return True
+                return False
         except Exception as e:
             print(f"Sensitive check error: {e}", file=sys.stderr)
-            return True
+            # 当连接失败时，假设内容不敏感，避免所有内容都被过滤
+            return False
 
     # 检查 summary 字段
     if is_sensitive(item.get("summary", "")):
@@ -72,36 +73,72 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
         "conclusion": "Conclusion extraction failed"
     }
 
-    try:
-        response: Structure = chain.invoke({
-            "language": language,
-            "content": item['summary']
-        })
-        item['AI'] = response.model_dump()
-    except langchain_core.exceptions.OutputParserException as e:
-        # 尝试从错误信息中提取 JSON 字符串并修复
-        error_msg = str(e)
-        partial_data = {}
-        
-        if "Function Structure arguments:" in error_msg:
-            try:
-                # 提取 JSON 字符串
-                json_str = error_msg.split("Function Structure arguments:", 1)[1].strip().split('are not valid JSON')[0].strip()
-                # 预处理 LaTeX 数学符号 - 使用四个反斜杠来确保正确转义
-                json_str = json_str.replace('\\', '\\\\')
-                # 尝试解析修复后的 JSON
-                partial_data = json.loads(json_str)
-            except Exception as json_e:
-                print(f"Failed to parse JSON for {item.get('id', 'unknown')}: {json_e}", file=sys.stderr)
-        
-        # Merge partial data with defaults to ensure all fields exist
-        item['AI'] = {**default_ai_fields, **partial_data}
-        print(f"Using partial AI data for {item.get('id', 'unknown')}: {list(partial_data.keys())}", file=sys.stderr)
-    except Exception as e:
-        # Catch any other exceptions and provide default values
-        print(f"Unexpected error for {item.get('id', 'unknown')}: {e}", file=sys.stderr)
+    import json
+    import re
+
+    # 尝试使用不同的链直到成功
+    last_exception = None
+    for i, chain in enumerate(chains_to_try):
+        try:
+            response = chain.invoke({
+                "language": language,
+                "content": item['summary']
+            })
+
+            # 响应现在是字符串，需要从中提取JSON
+            response_str = str(response)
+
+            # 尝试从响应中提取JSON对象
+            # 查找第一个 { 和最后一个 } 之间的内容
+            start_idx = response_str.find('{')
+            end_idx = response_str.rfind('}')
+
+            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                json_str = response_str[start_idx:end_idx+1]
+                try:
+                    ai_result = json.loads(json_str)
+
+                    # 确保所有必需字段都存在
+                    for field in default_ai_fields.keys():
+                        if field not in ai_result:
+                            ai_result[field] = default_ai_fields[field]
+
+                    item['AI'] = ai_result
+                    break  # 成功后跳出循环
+                except json.JSONDecodeError as json_err:
+                    print(f"JSON parsing failed for {item.get('id', 'unknown')}: {json_err}", file=sys.stderr)
+                    continue  # 尝试下一个链
+            else:
+                # 如果找不到JSON格式，尝试查找可能的JSON模式
+                # 使用正则表达式查找键值对
+                json_pattern = r'"[^"]*"\s*:\s*"([^"]*(?:\\.[^"]*)*)"'
+                matches = re.findall(json_pattern, response_str)
+
+                if len(matches) >= 3:  # 至少有3个值，可能是一个完整的结构
+                    # 尝试重建JSON结构
+                    possible_keys = ['tldr', 'motivation', 'method', 'result', 'conclusion']
+                    ai_result = {}
+                    for j, key in enumerate(possible_keys):
+                        if j < len(matches):
+                            ai_result[key] = matches[j]
+                        else:
+                            ai_result[key] = default_ai_fields[key]
+
+                    item['AI'] = ai_result
+                    break  # 成功后跳出循环
+                else:
+                    continue  # 尝试下一个链
+
+        except Exception as e:
+            last_exception = e
+            print(f"Chain {i+1} failed for {item.get('id', 'unknown')}: {e}", file=sys.stderr)
+            continue  # 尝试下一个链
+
+    # 如果所有链都失败，使用默认值
+    if 'AI' not in item:
+        print(f"All chains failed for {item.get('id', 'unknown')}, using default values: {last_exception}", file=sys.stderr)
         item['AI'] = default_ai_fields
-    
+
     # Final validation to ensure all required fields exist
     for field in default_ai_fields.keys():
         if field not in item['AI']:
@@ -116,25 +153,34 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
 
 def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int) -> List[Dict]:
     """并行处理所有数据项"""
-    llm = ChatOpenAI(model=model_name).with_structured_output(Structure, method="function_calling")
-    print('Connect to:', model_name, file=sys.stderr)
-    
+    # 创建基础模型
+    llm = ChatOpenAI(model=model_name)
+
+    # 创建一个强制输出JSON格式的提示
+    json_system = system + "\n\nIMPORTANT: Respond in valid JSON format with the following structure:\n" + \
+                 '{{"tldr": "...", "motivation": "...", "method": "...", "result": "...", "conclusion": "..."}}\n' + \
+                 'Ensure your entire response is a single, valid JSON object with no additional text before or after.'
+
     prompt_template = ChatPromptTemplate.from_messages([
-        SystemMessagePromptTemplate.from_template(system),
+        SystemMessagePromptTemplate.from_template(json_system),
         HumanMessagePromptTemplate.from_template(template=template)
     ])
 
-    chain = prompt_template | llm
-    
+    # 创建一个简单的链，直接输出文本，然后手动解析为JSON
+    from langchain_core.output_parsers import StrOutputParser
+    chain = prompt_template | llm | StrOutputParser()
+
+    print('Connect to:', model_name, file=sys.stderr)
+
     # 使用线程池并行处理
     processed_data = [None] * len(data)  # 预分配结果列表
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有任务
+        # 提交所有任务，传递chains_to_try列表而不是单个chain
         future_to_idx = {
-            executor.submit(process_single_item, chain, item, language): idx
+            executor.submit(process_single_item, [chain], item, language): idx
             for idx, item in enumerate(data)
         }
-        
+
         # 使用tqdm显示进度
         for future in tqdm(
             as_completed(future_to_idx),
@@ -156,7 +202,40 @@ def process_all_items(data: List[Dict], model_name: str, language: str, max_work
                     "result": "Processing failed",
                     "conclusion": "Processing failed"
                 }
+
+    return processed_data
     
+    # 使用线程池并行处理
+    processed_data = [None] * len(data)  # 预分配结果列表
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务，传递chains_to_try列表而不是单个chain
+        future_to_idx = {
+            executor.submit(process_single_item, chains_to_try, item, language): idx
+            for idx, item in enumerate(data)
+        }
+
+        # 使用tqdm显示进度
+        for future in tqdm(
+            as_completed(future_to_idx),
+            total=len(data),
+            desc="Processing items"
+        ):
+            idx = future_to_idx[future]
+            try:
+                result = future.result()
+                processed_data[idx] = result
+            except Exception as e:
+                print(f"Item at index {idx} generated an exception: {e}", file=sys.stderr)
+                # Add default AI fields to ensure consistency
+                processed_data[idx] = data[idx]
+                processed_data[idx]['AI'] = {
+                    "tldr": "Processing failed",
+                    "motivation": "Processing failed",
+                    "method": "Processing failed",
+                    "result": "Processing failed",
+                    "conclusion": "Processing failed"
+                }
+
     return processed_data
 
 def main():
