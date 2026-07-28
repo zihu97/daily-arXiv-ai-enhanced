@@ -198,7 +198,7 @@ def process_all_items(data: List[Dict], model_name: str, language: str, max_work
     # 使用线程池并行处理
     processed_data = [None] * len(data)  # 预分配结果列表
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有任务，传递chains_to_try列表而不是单个chain
+        # 提交所有任务，每篇论文共用同一个可重试 chain
         future_to_idx = {
             executor.submit(process_single_item, chain, item, language): idx
             for idx, item in enumerate(data)
