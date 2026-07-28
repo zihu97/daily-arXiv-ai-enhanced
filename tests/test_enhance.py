@@ -2,6 +2,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +121,27 @@ class GenerateAiFieldsTests(unittest.TestCase):
         self.assertEqual(len(sleeps), 30)
         self.assertEqual(sleeps[:3], [1, 2, 2])
         self.assertTrue(all(delay == 2 for delay in sleeps[2:]))
+
+
+class BuildLlmTests(unittest.TestCase):
+    @patch.object(enhance, "ChatOpenAI")
+    def test_requests_json_object_output_and_disables_hidden_retries(self, chat_openai):
+        base_llm = Mock()
+        bound_llm = Mock()
+        chat_openai.return_value = base_llm
+        base_llm.bind.return_value = bound_llm
+
+        result = enhance.build_llm("openrouter/free")
+
+        chat_openai.assert_called_once_with(
+            model="openrouter/free",
+            max_retries=0,
+        )
+        base_llm.bind.assert_called_once_with(
+            response_format={"type": "json_object"}
+        )
+        self.assertIs(result, bound_llm)
+
 
 if __name__ == "__main__":
     unittest.main()
