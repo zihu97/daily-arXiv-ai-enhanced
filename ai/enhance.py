@@ -168,10 +168,16 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
 
     return item
 
+
+def build_llm(model_name: str):
+    llm = ChatOpenAI(model=model_name, max_retries=0)
+    return llm.bind(response_format={"type": "json_object"})
+
+
 def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int) -> List[Dict]:
     """并行处理所有数据项"""
     # 创建基础模型
-    llm = ChatOpenAI(model=model_name)
+    llm = build_llm(model_name)
 
     # 创建一个强制输出JSON格式的提示
     json_system = system + "\n\nIMPORTANT: Respond in valid JSON format with the following structure:\n" + \
