@@ -77,7 +77,53 @@ def parse_ai_response(response) -> Dict[str, str]:
 
     return result
 
-def process_single_item(chains_to_try, item: Dict, language: str) -> Dict:
+
+MAX_AI_RETRIES = 30
+MAX_RETRY_DELAY_SECONDS = 2
+
+
+def generate_ai_fields(
+    chain,
+    inputs: Dict[str, str],
+    paper_id: str,
+    max_retries: int = MAX_AI_RETRIES,
+    sleep_fn=time.sleep,
+) -> Dict[str, str]:
+    total_attempts = max_retries + 1
+    last_error = None
+
+    for attempt in range(1, total_attempts + 1):
+        try:
+            response = chain.invoke(inputs)
+            result = parse_ai_response(response)
+            print(
+                f"Summary generated for {paper_id} on attempt "
+                f"{attempt}/{total_attempts}",
+                file=sys.stderr,
+            )
+            return result
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"Summary attempt {attempt}/{total_attempts} failed for "
+                f"{paper_id}: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+
+        if attempt < total_attempts:
+            retry_number = attempt
+            delay = min(2 ** (retry_number - 1), MAX_RETRY_DELAY_SECONDS)
+            sleep_fn(delay)
+
+    print(
+        f"All {total_attempts} summary attempts failed for {paper_id}; "
+        f"using default values: {last_error}",
+        file=sys.stderr,
+    )
+    return DEFAULT_AI_FIELDS.copy()
+
+
+def process_single_item(chain, item: Dict, language: str) -> Dict:
     def is_sensitive(content: str) -> bool:
         """
         调用 spam.dw-dengwei.workers.dev 接口检测内容是否包含敏感词。
@@ -106,122 +152,14 @@ def process_single_item(chains_to_try, item: Dict, language: str) -> Dict:
     if is_sensitive(item.get("summary", "")):
         return None
 
-    """处理单个数据项"""
-    # Default structure with meaningful fallback values
-    default_ai_fields = {
-        "tldr": "Summary generation failed",
-        "motivation": "Motivation analysis unavailable",
-        "method": "Method extraction failed",
-        "result": "Result analysis unavailable",
-        "conclusion": "Conclusion extraction failed"
-    }
-
-    import json
-    import re
-
-    # 尝试使用不同的链直到成功
-    last_exception = None
-    for i, chain in enumerate(chains_to_try):
-        try:
-            response = chain.invoke({
-                "language": language,
-                "content": item['summary']
-            })
-
-            # 响应现在是字符串，需要从中提取JSON
-            response_str = str(response)
-
-            # 调试：打印响应内容的前缀
-            print(f"Response for {item.get('id', 'unknown')} chain {i+1}: {response_str[:100]}...", file=sys.stderr)
-
-            # 尝试从响应中提取JSON对象
-            # 查找第一个 { 和最后一个 } 之间的内容
-            start_idx = response_str.find('{')
-            end_idx = response_str.rfind('}')
-
-            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
-                json_str = response_str[start_idx:end_idx+1]
-                try:
-                    ai_result = json.loads(json_str)
-
-                    # 确保所有必需字段都存在
-                    for field in default_ai_fields.keys():
-                        if field not in ai_result:
-                            ai_result[field] = default_ai_fields[field]
-
-                    item['AI'] = ai_result
-                    print(f"Successfully parsed JSON for {item.get('id', 'unknown')}", file=sys.stderr)
-                    break  # 成功后跳出循环
-                except json.JSONDecodeError as json_err:
-                    print(f"JSON parsing failed for {item.get('id', 'unknown')}: {json_err}", file=sys.stderr)
-                    print(f"Trying alternative parsing for response: {response_str[:200]}...", file=sys.stderr)
-
-                    # 尝试替代解析方法：查找可能的JSON模式
-                    # 使用正则表达式查找键值对
-                    json_pattern = r'"([^"]+)"\s*:\s*"([^"]*(?:\\.[^"]*)*)"'
-                    matches = re.findall(json_pattern, response_str)
-
-                    if len(matches) >= 3:  # 至少有3个键值对，可能是一个完整的结构
-                        # 尝试重建JSON结构
-                        ai_result = {}
-                        for key, value in matches:
-                            # 清理键名，移除可能的引号或其他字符
-                            clean_key = key.strip().strip('"').lower()
-                            if clean_key in default_ai_fields:
-                                ai_result[clean_key] = value
-
-                        # 确保所有必需字段都存在
-                        for field in default_ai_fields.keys():
-                            if field not in ai_result:
-                                ai_result[field] = default_ai_fields[field]
-
-                        item['AI'] = ai_result
-                        print(f"Successfully parsed with regex for {item.get('id', 'unknown')}", file=sys.stderr)
-                        break  # 成功后跳出循环
-                    else:
-                        print(f"Regex parsing also failed for {item.get('id', 'unknown')}", file=sys.stderr)
-                        continue  # 尝试下一个链
-            else:
-                # 如果找不到JSON格式，尝试查找可能的JSON模式
-                # 使用正则表达式查找键值对
-                json_pattern = r'"([^"]+)"\s*:\s*"([^"]*(?:\\.[^"]*)*)"'
-                matches = re.findall(json_pattern, response_str)
-
-                if len(matches) >= 3:  # 至少有3个值，可能是一个完整的结构
-                    # 尝试重建JSON结构
-                    ai_result = {}
-                    for key, value in matches:
-                        # 清理键名，移除可能的引号或其他字符
-                        clean_key = key.strip().strip('"').lower()
-                        if clean_key in default_ai_fields:
-                            ai_result[clean_key] = value
-
-                    # 确保所有必需字段都存在
-                    for field in default_ai_fields.keys():
-                        if field not in ai_result:
-                            ai_result[field] = default_ai_fields[field]
-
-                    item['AI'] = ai_result
-                    print(f"Successfully parsed with regex (no JSON delimiters) for {item.get('id', 'unknown')}", file=sys.stderr)
-                    break  # 成功后跳出循环
-                else:
-                    print(f"No JSON-like structure found in response for {item.get('id', 'unknown')}", file=sys.stderr)
-                    continue  # 尝试下一个链
-
-        except Exception as e:
-            last_exception = e
-            print(f"Chain {i+1} failed for {item.get('id', 'unknown')}: {e}", file=sys.stderr)
-            continue  # 尝试下一个链
-
-    # 如果所有链都失败，使用默认值
-    if 'AI' not in item:
-        print(f"All chains failed for {item.get('id', 'unknown')}, using default values: {last_exception}", file=sys.stderr)
-        item['AI'] = default_ai_fields
-
-    # Final validation to ensure all required fields exist
-    for field in default_ai_fields.keys():
-        if field not in item['AI']:
-            item['AI'][field] = default_ai_fields[field]
+    item["AI"] = generate_ai_fields(
+        chain,
+        {
+            "language": language,
+            "content": item["summary"],
+        },
+        item.get("id", "unknown"),
+    )
 
     # 检查 AI 生成的所有字段
     for v in item.get("AI", {}).values():
@@ -256,7 +194,7 @@ def process_all_items(data: List[Dict], model_name: str, language: str, max_work
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # 提交所有任务，传递chains_to_try列表而不是单个chain
         future_to_idx = {
-            executor.submit(process_single_item, [chain], item, language): idx
+            executor.submit(process_single_item, chain, item, language): idx
             for idx, item in enumerate(data)
         }
 
