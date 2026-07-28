@@ -37,6 +37,46 @@ def parse_args():
     parser.add_argument("--max_workers", type=int, default=1, help="Maximum number of parallel workers")
     return parser.parse_args()
 
+
+REQUIRED_AI_FIELDS = (
+    "tldr",
+    "motivation",
+    "method",
+    "result",
+    "conclusion",
+)
+
+DEFAULT_AI_FIELDS = {
+    "tldr": "Summary generation failed",
+    "motivation": "Motivation analysis unavailable",
+    "method": "Method extraction failed",
+    "result": "Result analysis unavailable",
+    "conclusion": "Conclusion extraction failed",
+}
+
+
+def parse_ai_response(response) -> Dict[str, str]:
+    response_text = str(response)
+    start_idx = response_text.find("{")
+    end_idx = response_text.rfind("}")
+    if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
+        raise ValueError("Response does not contain a JSON object")
+
+    try:
+        result = json.loads(response_text[start_idx:end_idx + 1])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Response contains invalid JSON: {exc}") from exc
+
+    if not isinstance(result, dict):
+        raise ValueError("Response JSON must be an object")
+
+    for field in REQUIRED_AI_FIELDS:
+        value = result.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Required field '{field}' is missing or empty")
+
+    return result
+
 def process_single_item(chains_to_try, item: Dict, language: str) -> Dict:
     def is_sensitive(content: str) -> bool:
         """
